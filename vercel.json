@@ -1,0 +1,6 @@
+{
+  "buildCommand": "cd Nexus/frontend && npm install && npm run build",
+  "outputDirectory": "Nexus/frontend/dist",
+  "installCommand": "echo skip",
+  "framework": null
+}
