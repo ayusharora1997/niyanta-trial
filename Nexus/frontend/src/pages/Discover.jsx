@@ -317,9 +317,9 @@ export default function Discover() {
                 <th className="idx">#</th>
                 <th>Keyword</th>
                 <th>Status</th>
-                <th>Filters</th>
+                <th className="flt">Filters</th>
                 <th className="num">Vendors</th>
-                <th>Started</th>
+                <th className="time">Started</th>
                 <th className="act">Action</th>
               </tr>
             </thead>
@@ -334,7 +334,7 @@ export default function Discover() {
                       {r.status === 'error' && r.error_message && <span className="n-err-inline">{r.error_message}</span>}
                     </td>
                     <td><StatusPill status={r.status} /></td>
-                    <td>
+                    <td className="flt">
                       {fc > 0
                         ? <span className="n-pill-filter">{fc} filter{fc > 1 ? 's' : ''} <span className="warn">⚠</span></span>
                         : <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fog-300)' }}>—</span>}
