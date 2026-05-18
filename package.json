@@ -1,0 +1,8 @@
+{
+  "name": "niyanta-scraper",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node scraper/server.js",
+    "postinstall": "cd scraper && npm ci && npx playwright install chromium --with-deps"
+  }
+}

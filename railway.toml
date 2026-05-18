@@ -1,4 +1,5 @@
 [deploy]
+startCommand = "node scraper/server.js"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
