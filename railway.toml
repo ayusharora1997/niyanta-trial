@@ -1,9 +1,4 @@
-[build]
-builder = "nixpacks"
-buildCommand = "cd scraper && npm ci && npx playwright install chromium"
-
 [deploy]
-startCommand = "cd scraper && node server.js"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
