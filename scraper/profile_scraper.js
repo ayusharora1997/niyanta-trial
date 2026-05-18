@@ -19,8 +19,11 @@ const INPUT_JSON  = path.join(__dirname, 'output.json');
 const OUTPUT_MD   = path.join(__dirname, 'enriched_profiles.md');
 const OUTPUT_JSON = path.join(__dirname, 'enriched_profiles.json');
 
-// Delay between vendor requests (ms) to be polite
-const REQUEST_DELAY = 2500;
+// Delay between page requests per worker (ms)
+const REQUEST_DELAY = parseInt(process.env.REQUEST_DELAY) || 500;
+
+// Number of parallel browser pages for enrichment
+const CONCURRENCY = parseInt(process.env.ENRICH_CONCURRENCY) || 3;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -31,7 +34,7 @@ async function sleep(ms) {
 async function safeGoto(page, url, opts = {}) {
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000, ...opts });
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(800);
     return true;
   } catch (e) {
     console.warn(`  [WARN] Failed to load: ${url} — ${e.message.split('\n')[0]}`);
@@ -516,59 +519,72 @@ async function enrichVendors(vendors, onProgress) {
     viewport: { width: 1440, height: 900 },
   });
 
-  const page = await context.newPage();
-  const enriched = [];
+  const concurrency = Math.min(CONCURRENCY, vendors.length);
+  console.log(`[enrich] ${vendors.length} vendors, concurrency=${concurrency}`);
 
-  for (const vendor of vendors) {
-    console.log(`\n[${vendor.index}/${vendors.length}] ${vendor.name}`);
-    const entry = { ...vendor, profile: null, trustSeal: null, website: null };
+  const results   = new Array(vendors.length);
+  let nextIdx     = 0;
+  let doneCount   = 0;
 
-    const isIndiamartUrl = vendor.profileUrl &&
-      (vendor.profileUrl.includes('indiamart.com') ||
-       vendor.profileUrl.includes('imimg.com'));
+  // Each worker owns one dedicated page and processes vendors from a shared queue
+  async function worker(page) {
+    while (true) {
+      const i = nextIdx++;           // safe: JS is single-threaded, no await before this
+      if (i >= vendors.length) break;
 
-    // ── Build the canonical IndiaMART profile URL
-    // For external-URL vendors, derive it from the slug (data-tscode from search scraper).
-    // This is the ONLY page that has bizInfo circles (Nature of Business, Employees, etc.)
-    let indiamartProfileUrl = isIndiamartUrl ? vendor.profileUrl : null;
-    if (!indiamartProfileUrl && vendor.slug) {
-      indiamartProfileUrl = `https://www.indiamart.com/${vendor.slug}/`;
+      const vendor = vendors[i];
+      console.log(`\n[${i + 1}/${vendors.length}] ${vendor.name}`);
+      const entry = { ...vendor, profile: null, trustSeal: null, website: null };
+
+      const isIndiamartUrl = vendor.profileUrl &&
+        (vendor.profileUrl.includes('indiamart.com') || vendor.profileUrl.includes('imimg.com'));
+
+      // Canonical IndiaMART profile URL (only page with bizInfo circles)
+      let indiamartProfileUrl = isIndiamartUrl ? vendor.profileUrl : null;
+      if (!indiamartProfileUrl && vendor.slug) {
+        indiamartProfileUrl = `https://www.indiamart.com/${vendor.slug}/`;
+      }
+
+      if (indiamartProfileUrl) {
+        entry.profile = await scrapeIndiamartProfile(page, indiamartProfileUrl);
+        await sleep(REQUEST_DELAY);
+      }
+
+      // External-URL vendor → also scrape their own site for intel
+      if (!isIndiamartUrl && vendor.profileUrl) {
+        entry.website = await scrapeExternalWebsite(page, vendor.profileUrl);
+        await sleep(REQUEST_DELAY);
+      }
+
+      // TrustSEAL cert
+      const tsUrl = entry.profile?.trustSealUrl;
+      if (tsUrl) {
+        entry.trustSeal = await scrapeTrustSeal(page, tsUrl);
+        await sleep(REQUEST_DELAY);
+      }
+
+      // External website from IndiaMART profile (if not already scraped above)
+      const extUrl = entry.profile?.externalWebsite;
+      if (extUrl && !entry.website) {
+        entry.website = await scrapeExternalWebsite(page, extUrl);
+        await sleep(REQUEST_DELAY);
+      }
+
+      results[i] = entry;
+      doneCount++;
+      if (onProgress) onProgress(entry, doneCount, vendors.length);
+      console.log(`  ✓ [${doneCount}/${vendors.length}] ${vendor.name} — trustSeal: ${!!entry.trustSeal}, website: ${!!entry.website}`);
     }
-
-    // ── Always scrape the indiamart.com profile for bizInfo + TrustSEAL URL
-    if (indiamartProfileUrl) {
-      entry.profile = await scrapeIndiamartProfile(page, indiamartProfileUrl);
-      await sleep(REQUEST_DELAY);
-    }
-
-    // ── For external-URL vendors, ALSO scrape their own website as website intel
-    if (!isIndiamartUrl && vendor.profileUrl) {
-      console.log(`  → External site: ${vendor.profileUrl}`);
-      entry.website = await scrapeExternalWebsite(page, vendor.profileUrl);
-      await sleep(REQUEST_DELAY);
-    }
-
-    // TrustSEAL — from the IndiaMART profile page onclick
-    const tsUrl = entry.profile?.trustSealUrl;
-    if (tsUrl) {
-      entry.trustSeal = await scrapeTrustSeal(page, tsUrl);
-      await sleep(REQUEST_DELAY);
-    }
-
-    // External website from IndiaMART profile page (only if not already set above)
-    const extUrl = entry.profile?.externalWebsite;
-    if (extUrl && !entry.website) {
-      entry.website = await scrapeExternalWebsite(page, extUrl);
-      await sleep(REQUEST_DELAY);
-    }
-
-    enriched.push(entry);
-    if (onProgress) onProgress(entry, enriched.length, vendors.length);
-    console.log(`  ✓ Done — trustSeal: ${!!entry.trustSeal}, website: ${!!entry.website}`);
   }
 
+  // Spawn pages and workers in parallel
+  const pages = await Promise.all(
+    Array.from({ length: concurrency }, () => context.newPage())
+  );
+  await Promise.all(pages.map(page => worker(page)));
+
   await browser.close();
-  return enriched;
+  return results;
 }
 
 // ── Standalone CLI entry ──────────────────────────────────────────────────────
