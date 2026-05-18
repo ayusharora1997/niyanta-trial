@@ -1,124 +1,62 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createSearchRun, getRun } from '../api.js';
 import ActiveJobCard from '../components/ActiveJobCard.jsx';
 import RunSummary from '../components/RunSummary.jsx';
 import ScrapeForm from '../components/ScrapeForm.jsx';
 import VendorDetails from '../components/VendorDetails.jsx';
-import { getRun, startScrape } from '../api.js';
-import { isRunningStatus, isTerminalStatus, sortVendorsByRating } from '../utils.js';
 
-export default function Discover({
-  activeRunId,
-  setActiveRunId,
-  activeRun,
-  setActiveRun,
-  vendors,
-  setVendors,
-  selectedVendorId,
-  setSelectedVendorId
-}) {
-  const [pollingJobId, setPollingJobId] = useState(null);
-  const [liveJob, setLiveJob] = useState(null);
-  const [tab, setTab] = useState('summary');
-  const [loadingRun, setLoadingRun] = useState(false);
-  const [error, setError] = useState('');
-  const resultsRef = useRef(null);
+const TERMINAL = new Set(['completed', 'error']);
 
-  const loadRun = useCallback(
-    async (searchId) => {
-      if (!searchId) return;
-      setLoadingRun(true);
-      setError('');
-      try {
-        const data = await getRun(searchId);
-        const live = data._live || data.run?._live || null;
-        const liveStatus = live?.status;
-        setActiveRun((current) => data.run ? { ...data.run, status: liveStatus || data.run.status } : (current ? { ...current, status: liveStatus || current.status } : null));
-        setVendors(data.vendors || []);
-        setLiveJob(live);
-        if (isRunningStatus(liveStatus || data.run?.status) || data.run?.status === 'pending') {
-          setPollingJobId(searchId);
-        }
-        setSelectedVendorId((current) => {
-          const loadedVendors = data.vendors || [];
-          return loadedVendors.some((vendor) => vendor.id === current) ? current : loadedVendors[0]?.id || null;
-        });
-      } catch (err) {
-        setError(err.message || 'Unable to load run.');
-      } finally {
-        setLoadingRun(false);
-      }
-    },
-    [setActiveRun, setSelectedVendorId, setVendors]
-  );
+export default function Discover() {
+  const [pollingId,        setPollingId]        = useState(null);
+  const [liveData,         setLiveData]         = useState(null);   // { run, vendors, _live }
+  const [tab,              setTab]              = useState('summary');
+  const [selectedVendorId, setSelectedVendorId] = useState(null);
+  const [submitting,       setSubmitting]       = useState(false);
+  const [submitError,      setSubmitError]      = useState('');
+  const timerRef = useRef(null);
 
-  useEffect(() => {
-    if (activeRunId) loadRun(activeRunId);
-  }, [activeRunId, loadRun]);
+  const stopPolling = useCallback(() => {
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+  }, []);
 
-  useEffect(() => {
-    if (!pollingJobId) return undefined;
-    let cancelled = false;
-
-    const poll = async () => {
-      try {
-        const data = await getRun(pollingJobId);
-        if (cancelled) return;
-        const live = data._live || data.run?._live || null;
-        const liveStatus = live?.status;
-        setActiveRun((current) => data.run ? { ...data.run, status: liveStatus || data.run.status } : (current ? { ...current, status: liveStatus || current.status } : null));
-        setVendors(data.vendors || []);
-        setLiveJob(live);
-        if (isTerminalStatus(data.run?.status || liveStatus)) {
-          setPollingJobId(null);
-          window.setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
-        }
-      } catch (err) {
-        if (!cancelled) setError(err.message || 'Polling failed.');
-      }
-    };
-
-    poll();
-    const timer = window.setInterval(poll, 3000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [pollingJobId, setActiveRun, setVendors]);
-
-  const handleSubmit = async (form) => {
-    setError('');
+  const poll = useCallback(async (searchId) => {
     try {
-      const body = {
-        url: form.url,
-        searchName: form.searchName,
-        keyword: form.keyword,
-        platform: form.platform,
-        country: form.country
-      };
-      const response = await startScrape(body);
-      setActiveRunId(response.searchId);
-      setActiveRun({ search_id: response.searchId, search_name: form.searchName, search_url: form.url, keyword: form.keyword, platform: form.platform, country: form.country, status: 'pending' });
-      setVendors([]);
-      setSelectedVendorId(null);
-      setLiveJob(null);
-      setTab('summary');
-      setPollingJobId(response.searchId);
+      const data = await getRun(searchId);
+      setLiveData(data);
+      const status = data._live?.status || data.run?.status;
+      if (TERMINAL.has(status)) stopPolling();
     } catch (err) {
-      setError(err.message || 'Unable to start scrape.');
-      throw err;
+      console.error('[poll]', err.message);
+    }
+  }, [stopPolling]);
+
+  useEffect(() => {
+    if (!pollingId) return;
+    poll(pollingId);
+    timerRef.current = setInterval(() => poll(pollingId), 3000);
+    return stopPolling;
+  }, [pollingId, poll, stopPolling]);
+
+  const handleSubmit = async (keyword) => {
+    setSubmitting(true);
+    setSubmitError('');
+    setLiveData(null);
+    setSelectedVendorId(null);
+    stopPolling();
+    try {
+      const result = await createSearchRun(keyword);
+      setPollingId(result.searchId);
+    } catch (err) {
+      setSubmitError(err.message || 'Failed to start search.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  const selectVendorAndOpenDetails = (vendorId) => {
-    setSelectedVendorId(vendorId);
-    setTab('details');
-    window.setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
-  };
-
-  const openDetailsTab = () => {
-    setSelectedVendorId(sortVendorsByRating(vendors)[0]?.id || null);
-    setTab('details');
-  };
+  const effectiveStatus = liveData?._live?.status || liveData?.run?.status;
+  const isActive  = liveData && !TERMINAL.has(effectiveStatus);
+  const isSettled = liveData &&  TERMINAL.has(effectiveStatus);
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
@@ -127,53 +65,69 @@ export default function Discover({
         <p className="mt-2 text-base text-slate-500">Powered by IndiaMART + TrustSEAL enrichment</p>
       </header>
 
-      <ScrapeForm onSubmit={handleSubmit} disabled={!!pollingJobId} />
+      <ScrapeForm onSubmit={handleSubmit} disabled={submitting || isActive} />
 
-      {error && <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-700">{error}</div>}
-
-      {(pollingJobId || isRunningStatus(activeRun?.status) || activeRun?.status === 'pending') && (
-        <ActiveJobCard run={activeRun} liveJob={liveJob} />
-      )}
-
-      {activeRun?.status === 'error' && (
-        <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-          <strong>Scrape failed:</strong> {activeRun.error_message || 'Unknown error'}
+      {submitError && (
+        <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-700">
+          {submitError}
         </div>
       )}
 
-      {loadingRun && (
-        <div className="card flex min-h-40 items-center justify-center p-8 text-sm font-semibold text-slate-500">
-          Loading run results...
-        </div>
-      )}
-
-      {activeRun && !loadingRun && (
-        <section ref={resultsRef} id="results" className="space-y-4">
-          <div className="flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
-            <TabButton active={tab === 'summary'} onClick={() => setTab('summary')}>Search Summary</TabButton>
-            <TabButton active={tab === 'details'} onClick={openDetailsTab}>Vendor Details</TabButton>
-          </div>
-          {tab === 'summary' ? (
-            <RunSummary run={activeRun} vendors={vendors} onVendorSelect={selectVendorAndOpenDetails} />
-          ) : (
-            <VendorDetails vendors={vendors} selectedVendorId={selectedVendorId} onVendorSelect={setSelectedVendorId} run={activeRun} />
+      {liveData && (
+        <>
+          {/* Live job card — shown while queued OR running */}
+          {(isActive || isSettled) && (
+            <ActiveJobCard run={liveData.run} liveJob={liveData._live} />
           )}
-        </section>
+
+          {/* Results — shown once completed or errored */}
+          {isSettled && liveData.run && (
+            <section className="space-y-4">
+              {/* Tab bar */}
+              <div className="flex gap-1 rounded-xl bg-slate-100 p-1 w-fit">
+                {[['summary', 'Search Summary'], ['vendors', 'Vendor Details']].map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setTab(key)}
+                    className={`rounded-lg px-5 py-2 text-sm font-semibold transition ${
+                      tab === key
+                        ? 'bg-white text-slate-950 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {tab === 'summary' && (
+                <RunSummary
+                  run={liveData.run}
+                  vendors={liveData.vendors}
+                  onVendorSelect={(id) => { setSelectedVendorId(id); setTab('vendors'); }}
+                />
+              )}
+              {tab === 'vendors' && (
+                <VendorDetails
+                  vendors={liveData.vendors}
+                  run={liveData.run}
+                  selectedVendorId={selectedVendorId}
+                  onVendorSelect={setSelectedVendorId}
+                />
+              )}
+            </section>
+          )}
+
+          {/* Error state */}
+          {isSettled && effectiveStatus === 'error' && (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 p-5">
+              <p className="font-semibold text-rose-800">Scrape failed</p>
+              <p className="mt-1 text-sm text-rose-700">{liveData._live?.error || liveData.run?.error_message || 'Unknown error'}</p>
+            </div>
+          )}
+        </>
       )}
     </div>
-  );
-}
-
-function TabButton({ active, onClick, children }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex-1 rounded-md px-4 py-2 text-sm font-bold transition ${
-        active ? 'bg-niyanta-indigo text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'
-      }`}
-    >
-      {children}
-    </button>
   );
 }

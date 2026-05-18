@@ -21,20 +21,28 @@ export default function ActiveJobCard({ run, liveJob }) {
         </div>
         <StatusBadge status={liveJob?.status || run?.status} />
       </div>
-      {total > 0 ? (
-        <div className="mb-4">
-          <div className="mb-2 flex items-center justify-between text-sm font-semibold text-slate-700">
-            <span>Enriching profiles: {progress} / {total}</span>
-            <span>{percent}%</span>
-          </div>
-          <div className="h-3 overflow-hidden rounded-full bg-slate-100">
-            <div className="h-full rounded-full bg-niyanta-indigo transition-all" style={{ width: `${percent}%` }} />
-          </div>
+      {liveJob?.status === 'queued' ? (
+        <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800">
+          <span className="font-bold">Queued</span>
+          {liveJob.queuePosition > 0 && ` — position ${liveJob.queuePosition} in queue`}
+          <span className="ml-2 text-amber-600">Waiting for previous job to finish...</span>
         </div>
       ) : (
-        <div className="mb-4 h-3 overflow-hidden rounded-full bg-slate-100">
-          <div className="h-full w-1/3 animate-pulse rounded-full bg-niyanta-indigo" />
-        </div>
+        total > 0 ? (
+          <div className="mb-4">
+            <div className="mb-2 flex items-center justify-between text-sm font-semibold text-slate-700">
+              <span>Enriching profiles: {progress} / {total}</span>
+              <span>{percent}%</span>
+            </div>
+            <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+              <div className="h-full rounded-full bg-niyanta-indigo transition-all" style={{ width: `${percent}%` }} />
+            </div>
+          </div>
+        ) : (
+          <div className="mb-4 h-3 overflow-hidden rounded-full bg-slate-100">
+            <div className="h-full w-1/3 animate-pulse rounded-full bg-niyanta-indigo" />
+          </div>
+        )
       )}
       <pre
         ref={logRef}

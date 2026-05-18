@@ -3,7 +3,7 @@ const express  = require('express');
 const cors     = require('cors');
 const { v4: uuidv4 } = require('uuid');
 
-const { runSearch }    = require('./scraper');
+const { runSearch, buildSearchUrl } = require('./scraper');
 const { enrichVendors, buildMarkdown } = require('./profile_scraper');
 const { extractFilters, generateFilterUrls } = require('./filter_scraper');
 const db = require('./db');
@@ -17,6 +17,32 @@ app.use(express.json());
 // ── In-memory job progress store (keyed by searchId) ─────────────────────────
 const jobs = {};  // { [searchId]: { status, progress, total, log, error } }
 
+// ── FIFO job queue ────────────────────────────────────────────────────────────
+const jobQueue = [];   // { searchId, fn }
+let queueRunning = false;
+
+function enqueueJob(searchId, fn) {
+  jobQueue.push({ searchId, fn });
+  refreshQueuePositions();
+  if (!queueRunning) drainQueue();
+}
+
+function refreshQueuePositions() {
+  jobQueue.forEach(({ searchId: sid }, idx) => {
+    if (jobs[sid]) jobs[sid].queuePosition = idx + 1;
+  });
+}
+
+async function drainQueue() {
+  if (queueRunning || !jobQueue.length) return;
+  queueRunning = true;
+  const { searchId: sid, fn } = jobQueue.shift();
+  if (jobs[sid]) jobs[sid].queuePosition = 0;
+  refreshQueuePositions();
+  try { await fn(); } catch { /* errors handled inside fn */ }
+  finally { queueRunning = false; drainQueue(); }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /health
 // ─────────────────────────────────────────────────────────────────────────────
@@ -28,21 +54,23 @@ app.get('/health', (_, res) => res.json({ ok: true, ts: new Date().toISOString()
 // Returns immediately with { searchId } — poll /api/runs/:searchId for status
 // ─────────────────────────────────────────────────────────────────────────────
 app.post('/api/scrape', async (req, res) => {
-  const { url, searchName, keyword, platform, country, clientId, maxFilterUrls = 5, combineDepth = 2 } = req.body;
+  const { searchName, keyword, platform, country, clientId, maxFilterUrls = 5, combineDepth = 2 } = req.body;
+  let { url } = req.body;
 
-  if (!url) return res.status(400).json({ error: 'url is required' });
+  if (!url && !keyword) return res.status(400).json({ error: 'url or keyword is required' });
+  if (!url) url = buildSearchUrl(keyword);
 
   const searchId = `sr-${uuidv4()}`;
-  jobs[searchId] = { status: 'pending', progress: 0, total: 0, log: [], error: null, filterUrlCount: 0 };
+  jobs[searchId] = { status: 'queued', progress: 0, total: 0, log: [], error: null, filterUrlCount: 0, queuePosition: jobQueue.length + 1 };
 
-  res.json({ searchId, message: 'Scrape started. Poll /api/runs/:searchId for status.' });
+  res.json({ searchId, message: 'Job queued. Poll /api/runs/:searchId for status.' });
 
   // Runs base URL first (Layer 1 + Layer 2), then up to maxFilterUrls filter
   // URLs (each Layer 1 + Layer 2).  Frontend only needs to send the URL.
-  runMultiPipeline({ searchId, url, searchName, keyword, platform, country, clientId, combineDepth, maxFilterUrls }).catch(err => {
+  enqueueJob(searchId, () => runMultiPipeline({ searchId, url, searchName, keyword, platform, country, clientId, combineDepth, maxFilterUrls }).catch(err => {
     console.error(`[${searchId}] Pipeline crashed:`, err.message);
     jobs[searchId] = { ...jobs[searchId], status: 'error', error: err.message };
-  });
+  }));
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,19 +110,21 @@ app.get('/api/filters', async (req, res) => {
 // Returns immediately with { searchId, filterUrlCount } — poll /api/runs/:searchId.
 // ─────────────────────────────────────────────────────────────────────────────
 app.post('/api/scrape/multi', async (req, res) => {
-  const { url, searchName, keyword, platform, country, clientId, combineDepth, maxFilterUrls } = req.body;
+  const { searchName, keyword, platform, country, clientId, combineDepth, maxFilterUrls } = req.body;
+  let { url } = req.body;
 
-  if (!url) return res.status(400).json({ error: 'url is required' });
+  if (!url && !keyword) return res.status(400).json({ error: 'url or keyword is required' });
+  if (!url) url = buildSearchUrl(keyword);
 
   const searchId = `sr-${uuidv4()}`;
-  jobs[searchId] = { status: 'pending', progress: 0, total: 0, log: [], error: null, filterUrlCount: 0 };
+  jobs[searchId] = { status: 'queued', progress: 0, total: 0, log: [], error: null, filterUrlCount: 0, queuePosition: jobQueue.length + 1 };
 
-  res.json({ searchId, message: 'Multi-filter scrape started. Poll /api/runs/:searchId for status.' });
+  res.json({ searchId, message: 'Job queued. Poll /api/runs/:searchId for status.' });
 
-  runMultiPipeline({ searchId, url, searchName, keyword, platform, country, clientId, combineDepth, maxFilterUrls }).catch(err => {
+  enqueueJob(searchId, () => runMultiPipeline({ searchId, url, searchName, keyword, platform, country, clientId, combineDepth, maxFilterUrls }).catch(err => {
     console.error(`[${searchId}] Multi-pipeline crashed:`, err.message);
     jobs[searchId] = { ...jobs[searchId], status: 'error', error: err.message };
-  });
+  }));
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -122,7 +152,7 @@ app.get('/api/runs', async (_, res) => {
 app.get('/api/runs/:searchId', async (req, res) => {
   const { searchId } = req.params;
   try {
-    // If the job is still in-memory (just started), return live state
+    // If the job is still in-memory (queued/running), return live state
     if (jobs[searchId] && jobs[searchId].status !== 'completed' && jobs[searchId].status !== 'error') {
       return res.json({ run: null, vendors: [], _live: jobs[searchId] });
     }
@@ -201,13 +231,14 @@ async function runPipeline({ searchId, url, searchName, keyword, platform, count
     // 2. Run search scraper
     log('Launching search scraper…');
     jobs[searchId].status = 'scraping_search';
-    const { vendors } = await runSearch(url);
+    const { vendors, activeFilters = [] } = await runSearch(url);
     jobs[searchId].total = vendors.length;
     log(`Search done — ${vendors.length} vendors found.`);
 
     await db.updateSearchRun(searchId, {
       vendors_found: vendors.length,
       pages_scraped: 1,
+      filters_applied: activeFilters,
     });
 
     // 3. Enrich each vendor profile
@@ -295,7 +326,12 @@ async function runMultiPipeline({ searchId, url, searchName, keyword, platform, 
     log(`${label} -- Layer 1: scraping search results...`);
     jobs[searchId].status = 'scraping_search';
 
-    const { vendors } = await runSearch(targetUrl);
+    const { vendors, activeFilters } = await runSearch(targetUrl);
+
+    // Save detected filters for the base URL pass only
+    if (label === 'Base URL' && Array.isArray(activeFilters) && activeFilters.length) {
+      await db.updateSearchRun(searchId, { filters_applied: activeFilters }).catch(() => {});
+    }
 
     // Deduplicate against globally seen slugs
     const newVendors = vendors.filter(v => {

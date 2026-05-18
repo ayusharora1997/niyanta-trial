@@ -1,29 +1,32 @@
 const BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
-const parseJson = async (response) => {
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Request failed with ${response.status}`);
-  }
-  return response.json();
+const json = (res) => {
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
 };
 
-export const startScrape = (body) =>
+// Start a scrape job — accepts a plain keyword string
+export const createSearchRun = (keyword) =>
   fetch(`${BASE}/api/scrape`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  }).then(parseJson);
+    body: JSON.stringify({ keyword, searchName: keyword }),
+  }).then(json);
 
-export const listRuns = () => fetch(`${BASE}/api/runs`).then(parseJson);
+// List recent search runs (includes _live state for in-progress jobs)
+export const listRuns = () =>
+  fetch(`${BASE}/api/runs`).then(json);
 
-export const getRun = (id) => fetch(`${BASE}/api/runs/${id}`).then(parseJson);
+// Get a single run + its vendors
+export const getRun = (searchId) =>
+  fetch(`${BASE}/api/runs/${searchId}`).then(json);
 
-export const getMarkdown = async (id) => {
-  const response = await fetch(`${BASE}/api/runs/${id}/markdown`);
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Request failed with ${response.status}`);
-  }
-  return response.text();
-};
+// Download enriched markdown for a completed run
+export const getMarkdown = (searchId) =>
+  fetch(`${BASE}/api/runs/${searchId}/markdown`).then((res) => {
+    if (!res.ok) throw new Error(`API error ${res.status}`);
+    return res.text();
+  });
+
+// No-op: components already poll via setInterval — realtime not needed
+export const subscribeToSearchRuns = (_onChange) => () => {};
