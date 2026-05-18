@@ -44,7 +44,29 @@ export default function RunSummary({ run, vendors, onVendorSelect }) {
           <Meta label="Vendors Found" value={`${run.vendors_found ?? 0} found, ${run.vendors_inserted ?? 0} inserted`} />
           <Meta label="Duration" value={formatDuration(run.duration_seconds)} />
           <Meta label="Scraped" value={formatDateTime(run.completed_at || run.started_at)} />
+          <div>
+            <dt className="font-semibold text-slate-500">IndiaMART URL</dt>
+            <dd className="mt-1 flex min-w-0 items-center gap-2">
+              {run.search_url
+                ? <a href={run.search_url} target="_blank" rel="noreferrer" className="truncate text-indigo-600 hover:text-indigo-500 font-semibold">{run.search_url}</a>
+                : <span className="text-slate-900">—</span>}
+            </dd>
+          </div>
         </dl>
+
+        {/* Active filters from this run */}
+        {Array.isArray(run.filters_applied) && run.filters_applied.length > 0 && (
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Filters active during this search</p>
+            <div className="flex flex-wrap gap-2">
+              {run.filters_applied.map((f, i) => (
+                <span key={i} className="inline-flex items-center rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-800">
+                  {f.label}: {f.value}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="card overflow-hidden">

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { createSearchRun, getRun } from '../api.js';
 import ActiveJobCard from '../components/ActiveJobCard.jsx';
 import RunSummary from '../components/RunSummary.jsx';
@@ -15,6 +16,7 @@ export default function Discover() {
   const [submitting,       setSubmitting]       = useState(false);
   const [submitError,      setSubmitError]      = useState('');
   const timerRef = useRef(null);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const stopPolling = useCallback(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
@@ -30,6 +32,16 @@ export default function Discover() {
       console.error('[poll]', err.message);
     }
   }, [stopPolling]);
+
+  // Load a historical run if ?run= is in the URL (linked from History page)
+  useEffect(() => {
+    const runId = searchParams.get('run');
+    if (runId) {
+      setPollingId(runId);
+      setSearchParams({}, { replace: true }); // clean URL after loading
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!pollingId) return;
@@ -75,8 +87,8 @@ export default function Discover() {
 
       {liveData && (
         <>
-          {/* Live job card — shown while queued OR running */}
-          {(isActive || isSettled) && (
+          {/* Live job card — only shown while job is queued/running, hides on completion */}
+          {isActive && (
             <ActiveJobCard run={liveData.run} liveJob={liveData._live} />
           )}
 
