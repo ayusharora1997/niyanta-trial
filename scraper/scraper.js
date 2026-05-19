@@ -48,8 +48,9 @@ async function scrape(targetUrlOrKeyword) {
   console.log('[NAV] Navigating to:', TARGET_URL);
   await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-  await page.waitForSelector('div.card', { timeout: 20000 }).catch(() => {
-    console.warn('[NAV] Selector div.card not found — page structure may have changed.');
+  // Wait for any vendor card to appear — try data-attribute anchor first, fall back to CSS class
+  await page.waitForSelector('[data-tscode], div.card', { timeout: 20000 }).catch(() => {
+    console.warn('[NAV] No vendor cards found — page may be empty or structure changed.');
   });
 
   // ── Detect active filters from the first page only ────────────────────────
@@ -128,7 +129,7 @@ async function scrape(targetUrlOrKeyword) {
       pageUrl.searchParams.set('page', pageNum);
       console.log(`[NAV] Page ${pageNum}/${MAX_PAGES}: ${pageUrl.toString()}`);
       await page.goto(pageUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await page.waitForSelector('div.card', { timeout: 15000 }).catch(() => {});
+      await page.waitForSelector('[data-tscode], div.card', { timeout: 15000 }).catch(() => {});
     }
 
     console.log(`[SCRAPE] Scrolling page ${pageNum} to load lazy cards…`);
@@ -137,14 +138,30 @@ async function scrape(targetUrlOrKeyword) {
     console.log(`[SCRAPE] Extracting vendor cards from page ${pageNum}…`);
     const pageVendors = await page.evaluate(() => {
       const results = [];
-      // Try LST-prefixed cards first (original format); fall back to SUPP- then all .card divs
-      const cardSelector = document.querySelector('div.card[id^="LST"]')
-        ? 'div.card[id^="LST"]'
-        : document.querySelector('div.card[id^="SUPP"]')
-          ? 'div.card[id^="SUPP"]'
-          : 'div.card';
-      console.log('[SCRAPE] Using card selector:', cardSelector, '— matched:', document.querySelectorAll(cardSelector).length);
-      document.querySelectorAll(cardSelector).forEach((card, idx) => {
+
+      // ── Resilient card discovery ─────────────────────────────────────────────
+      // Priority 1: data-tscode is IndiaMART's own vendor tracking attribute —
+      //   the most stable signal, tied to their business logic not their CSS.
+      // Priority 2: ID-prefix patterns (LST / SUPP) — historical but may change.
+      // Priority 3: any div.card that contains a vendor profile link as fallback.
+      let cards;
+      if (document.querySelector('[data-tscode]')) {
+        cards = Array.from(document.querySelectorAll('[data-tscode]'));
+        console.log('[SCRAPE] Card strategy: data-tscode —', cards.length, 'cards');
+      } else if (document.querySelector('[id^="LST"]')) {
+        cards = Array.from(document.querySelectorAll('[id^="LST"]'));
+        console.log('[SCRAPE] Card strategy: id^=LST —', cards.length, 'cards');
+      } else if (document.querySelector('[id^="SUPP"]')) {
+        cards = Array.from(document.querySelectorAll('[id^="SUPP"]'));
+        console.log('[SCRAPE] Card strategy: id^=SUPP —', cards.length, 'cards');
+      } else {
+        // Broadest fallback: any card-like element containing an IndiaMART vendor link
+        cards = Array.from(document.querySelectorAll('div.card, [class*="supplier-card"], [class*="sellerCard"]'))
+          .filter(el => el.querySelector('a[href*="indiamart.com"]') || el.getAttribute('data-city'));
+        console.log('[SCRAPE] Card strategy: broad fallback —', cards.length, 'cards');
+      }
+
+      cards.forEach((card, idx) => {
         const getText = (sel) => card.querySelector(sel)?.innerText?.trim() || '';
 
         const city     = card.getAttribute('data-city')     || '';
@@ -152,24 +169,30 @@ async function scrape(targetUrlOrKeyword) {
         const rating   = card.getAttribute('data-rating')   || '';
         const slug     = card.getAttribute('data-tscode')   || '';
 
-        const nameAnchor = card.querySelector('div.companyname a.cardlinks');
-        const name = nameAnchor?.innerText?.trim() || `Vendor ${idx + 1}`;
+        // Company name: try known selectors then fall back to first visible heading/link
+        const nameAnchor = card.querySelector('div.companyname a, [class*="companyname"] a, [class*="company-name"] a, a.cardlinks');
+        const name = nameAnchor?.innerText?.trim()
+          || card.querySelector('h2, h3, [class*="name"]')?.innerText?.trim()
+          || `Vendor ${idx + 1}`;
 
-        let profileUrl = nameAnchor?.href || '';
+        // Profile URL: strip query params for a clean canonical link
+        let profileUrl = nameAnchor?.href || card.querySelector('a[href*="indiamart.com"]')?.href || '';
         try { profileUrl = new URL(profileUrl).origin + new URL(profileUrl).pathname; } catch (_) {}
 
-        const locationEl  = card.querySelector('.newLocationUi');
-        const locationText = locationEl?.innerText?.trim().replace(/\s+/g, ' ') || [city, locality].filter(Boolean).join(' - ');
+        // Location: prefer the dedicated element, fall back to data attributes
+        const locationEl   = card.querySelector('[class*="location"], [class*="Location"], [class*="city"]');
+        const locationText = locationEl?.innerText?.trim().replace(/\s+/g, ' ')
+          || [city, locality].filter(Boolean).join(' - ');
 
-        const memberText = getText('span.memberSinceDisplay') || getText('.memberSinceDisplay');
-        const reviewEl  = card.querySelector('[id^="sellerrating_"] span.color');
-        const reviews   = reviewEl?.innerText?.trim() || '';
+        const memberText = getText('[class*="memberSince"], [class*="member-since"], span.memberSinceDisplay');
+        const reviewEl   = card.querySelector('[id^="sellerrating_"] span, [class*="rating"] span');
+        const reviews    = reviewEl?.innerText?.trim() || '';
 
         const gstVerified = !!card.querySelector('[class*="gst"], [alt*="GST"], [title*="GST"]') || /\bGST\b/.test(card.innerText);
         const trustSeal   = !!card.querySelector('[class*="trust"], [alt*="Trust"]') || /TrustSEAL/i.test(card.innerText);
 
         const productItems = [];
-        card.querySelectorAll('.prd-name, .product-name, [class*="prdname"], h4, .prdtitle').forEach(el => {
+        card.querySelectorAll('[class*="prd-name"], [class*="product-name"], [class*="prdname"], [class*="prdtitle"]').forEach(el => {
           const t = el.innerText.trim();
           if (t && t.length < 120) productItems.push(t);
         });
@@ -177,8 +200,8 @@ async function scrape(targetUrlOrKeyword) {
         const priceText = getText('[class*="price"], [class*="prc"]');
         const dealsIn   = locationText.includes('Deals in') ? locationText : '';
 
-        // Skip nav/promo cards that have no vendor identity
-        if (!profileUrl && !slug && !city && name === `Vendor ${idx + 1}`) return;
+        // Must have at least one vendor identity signal — skip nav/promo cards
+        if (!slug && !profileUrl && !city) return;
 
         results.push({ index: idx + 1, name, city, locality, location: locationText, dealsIn, rating, reviews, memberSince: memberText, gstVerified, trustSeal, products: productItems, price: priceText, profileUrl, slug });
       });
