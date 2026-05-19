@@ -79,8 +79,19 @@ async function scrape(targetUrlOrKeyword, logFn) {
   const pageTitle = await page.title();
   log(`[NAV] Landed on: "${pageTitle}" | ${finalUrl}`);
 
+  // IndiaMART redirects non-Indian IPs to export.indiamart.com and shows a
+  // language selector popup that blocks the search results.  Dismiss it by
+  // clicking the "English" option, then wait for the results to render.
+  if (finalUrl.includes('export.indiamart.com')) {
+    log('[NAV] Detected export site redirect — dismissing language selector...');
+    await page.click('a:has-text("English"), button:has-text("English"), li:has-text("English")')
+      .catch(() => page.keyboard.press('Escape'));
+    await page.waitForTimeout(3000);
+    log('[NAV] Language selector dismissed. Current URL: ' + page.url());
+  }
+
   // Wait for any vendor card to appear — try data-attribute anchor first, fall back to CSS class
-  const cardFound = await page.waitForSelector('[data-tscode], div.card', { timeout: 20000 })
+  const cardFound = await page.waitForSelector('[data-tscode], div.card, .product-list-item, .supplier-card', { timeout: 20000 })
     .then(() => true)
     .catch(() => false);
   if (!cardFound) {
@@ -190,9 +201,12 @@ async function scrape(targetUrlOrKeyword, logFn) {
         cards = Array.from(document.querySelectorAll('[id^="SUPP"]'));
         console.log('[SCRAPE] Card strategy: id^=SUPP —', cards.length, 'cards');
       } else {
-        // Broadest fallback: any card-like element containing an IndiaMART vendor link
-        cards = Array.from(document.querySelectorAll('div.card, [class*="supplier-card"], [class*="sellerCard"]'))
-          .filter(el => el.querySelector('a[href*="indiamart.com"]') || el.getAttribute('data-city'));
+        // Broadest fallback: handles export.indiamart.com and any future restructure
+        cards = Array.from(document.querySelectorAll(
+          'div.card, [class*="supplier-card"], [class*="sellerCard"], ' +
+          '[class*="product-list"], [class*="supplierList"], ' +
+          'li[class*="supplier"], li[class*="seller"], article[class*="card"]'
+        )).filter(el => el.querySelector('a[href*="indiamart.com"]') || el.getAttribute('data-city'));
         console.log('[SCRAPE] Card strategy: broad fallback —', cards.length, 'cards');
       }
 
