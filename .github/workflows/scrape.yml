@@ -72,3 +72,14 @@ jobs:
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
         run: node pipeline.js
+
+      - name: Upload debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-debug
+          path: |
+            scraper/debug_no_cards.png
+            scraper/debug_no_cards.html
+            scraper/output.json
+          if-no-files-found: ignore

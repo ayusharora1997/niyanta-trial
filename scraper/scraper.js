@@ -109,6 +109,12 @@ async function scrape(targetUrlOrKeyword, logFn) {
   if (!cardFound) {
     const bodySnippet = await page.evaluate(() => document.body?.innerText?.substring(0, 300) || '(empty)');
     log('[NAV] No vendor cards found. Page text: ' + bodySnippet);
+    try {
+      await page.screenshot({ path: path.join(__dirname, 'debug_no_cards.png'), fullPage: true });
+      const html = await page.content();
+      fs.writeFileSync(path.join(__dirname, 'debug_no_cards.html'), html, 'utf8');
+      log('[NAV] Saved debug_no_cards.png and debug_no_cards.html');
+    } catch (e) { log('[NAV] Screenshot/HTML dump failed: ' + e.message); }
   }
 
   // ── Detect active filters from the first page only ────────────────────────
