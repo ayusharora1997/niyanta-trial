@@ -25,6 +25,7 @@ function buildSearchUrl(keyword) {
  */
 async function scrape(targetUrlOrKeyword, logFn) {
   const log = logFn || console.log;
+  log('[SCRAPER] scrape() called — target: ' + (targetUrlOrKeyword || '(default)'));
   const raw = targetUrlOrKeyword
     || process.env.SEARCH_KEYWORD
     || process.env.INDIAMART_KEYWORD
@@ -33,6 +34,7 @@ async function scrape(targetUrlOrKeyword, logFn) {
 
   const TARGET_URL = raw.startsWith('http') ? raw : buildSearchUrl(raw);
 
+  log('[SCRAPER] Launching browser...');
   const browser = await chromium.launch({
     headless: true,
     args: [
