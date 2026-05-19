@@ -102,8 +102,9 @@ async function scrape(targetUrlOrKeyword, logFn) {
     }
   }
 
-  // Wait for any vendor card to appear — try data-attribute anchor first, fall back to CSS class
-  const cardFound = await page.waitForSelector('[data-tscode], div.card, .product-list-item, .supplier-card', { timeout: 20000 })
+  // Wait for any vendor card to appear — covers dir.indiamart.com (data-tscode/div.card)
+  // and export.indiamart.com (Tailwind cards containing /company/ links)
+  const cardFound = await page.waitForSelector('[data-tscode], div.card, .product-list-item, .supplier-card, a[href*="/company/"]', { timeout: 20000 })
     .then(() => true)
     .catch(() => false);
   if (!cardFound) {
@@ -203,13 +204,18 @@ async function scrape(targetUrlOrKeyword, logFn) {
     const pageVendors = await page.evaluate(() => {
       const results = [];
 
-      // ── Resilient card discovery ─────────────────────────────────────────────
-      // Priority 1: data-tscode is IndiaMART's own vendor tracking attribute —
-      //   the most stable signal, tied to their business logic not their CSS.
-      // Priority 2: ID-prefix patterns (LST / SUPP) — historical but may change.
-      // Priority 3: any div.card that contains a vendor profile link as fallback.
+      const isExport = location.hostname.includes('export.indiamart.com');
+
       let cards;
-      if (document.querySelector('[data-tscode]')) {
+      if (isExport) {
+        // export.indiamart.com renders one card per product. The vendor link
+        // (a[href*="/company/"]) is unique per card, so anchor on it and walk
+        // up to the card container.
+        const vendorAnchors = Array.from(document.querySelectorAll('a[href*="/company/"]'));
+        cards = vendorAnchors.map(a => a.closest('div.bg-white.rounded-lg') || a.closest('[class*="rounded-lg"][class*="border"]') || a.parentElement?.parentElement?.parentElement).filter(Boolean);
+        cards = [...new Set(cards)];
+        console.log('[SCRAPE] Card strategy: export vendor-anchor —', cards.length, 'cards');
+      } else if (document.querySelector('[data-tscode]')) {
         cards = Array.from(document.querySelectorAll('[data-tscode]'));
         console.log('[SCRAPE] Card strategy: data-tscode —', cards.length, 'cards');
       } else if (document.querySelector('[id^="LST"]')) {
@@ -219,7 +225,6 @@ async function scrape(targetUrlOrKeyword, logFn) {
         cards = Array.from(document.querySelectorAll('[id^="SUPP"]'));
         console.log('[SCRAPE] Card strategy: id^=SUPP —', cards.length, 'cards');
       } else {
-        // Broadest fallback: handles export.indiamart.com and any future restructure
         cards = Array.from(document.querySelectorAll(
           'div.card, [class*="supplier-card"], [class*="sellerCard"], ' +
           '[class*="product-list"], [class*="supplierList"], ' +
@@ -230,23 +235,67 @@ async function scrape(targetUrlOrKeyword, logFn) {
 
       cards.forEach((card, idx) => {
         const getText = (sel) => card.querySelector(sel)?.innerText?.trim() || '';
+        const cardText = card.innerText || '';
 
+        if (isExport) {
+          // Export site card: vendor link is /company/{id}/?..., product link is /products/?id=...
+          const vendorAnchor = card.querySelector('a[href*="/company/"]');
+          if (!vendorAnchor) return;
+          const name = vendorAnchor.innerText.trim();
+          let profileUrl = vendorAnchor.href || '';
+          const slugMatch = profileUrl.match(/\/company\/(\d+)/);
+          const slug = slugMatch ? slugMatch[1] : '';
+          try { profileUrl = new URL(profileUrl).origin + new URL(profileUrl).pathname; } catch (_) {}
+
+          const productAnchor = card.querySelector('a[href*="/products/"]');
+          const productName = productAnchor?.innerText?.trim() || '';
+
+          // Price is the first <p> containing a currency symbol or "Price"
+          let priceText = '';
+          card.querySelectorAll('p').forEach(p => {
+            const t = p.innerText.trim();
+            if (!priceText && /[$₹€£]|\/\s*(Meter|Piece|Kg|Unit)/i.test(t)) priceText = t.replace(/\s+/g, ' ');
+          });
+
+          const gstVerified = /GST\s*Verified/i.test(cardText);
+          const trustSeal   = /TrustSEAL/i.test(cardText);
+          const verifiedExporter = /Verified\s*Exporter/i.test(cardText);
+          const iecVerified = /IEC\s*Verified/i.test(cardText);
+
+          const ratingMatch  = cardText.match(/(\d\.\d)\s*\(\s*(\d+)\s*\)/);
+          const rating  = ratingMatch ? ratingMatch[1] : '';
+          const reviews = ratingMatch ? `(${ratingMatch[2]})` : '';
+
+          const exportsToMatch  = cardText.match(/Exports\s*To:\s*([^\n]+)/i);
+          const sinceMatch      = cardText.match(/Exporting\s*Since:?\s*([^\n]+)/i);
+          const location_       = exportsToMatch ? `Exports To: ${exportsToMatch[1].trim()}` : '';
+          const memberText      = sinceMatch ? sinceMatch[1].trim() : '';
+
+          if (!slug && !profileUrl) return;
+          results.push({
+            index: idx + 1, name, city: '', locality: '', location: location_, dealsIn: '',
+            rating, reviews, memberSince: memberText,
+            gstVerified, trustSeal, verifiedExporter, iecVerified,
+            products: productName ? [productName] : [],
+            price: priceText, profileUrl, slug,
+          });
+          return;
+        }
+
+        // ── dir.indiamart.com / legacy card path ───────────────────────────────
         const city     = card.getAttribute('data-city')     || '';
         const locality = card.getAttribute('data-locality') || '';
         const rating   = card.getAttribute('data-rating')   || '';
         const slug     = card.getAttribute('data-tscode')   || '';
 
-        // Company name: try known selectors then fall back to first visible heading/link
         const nameAnchor = card.querySelector('div.companyname a, [class*="companyname"] a, [class*="company-name"] a, a.cardlinks');
         const name = nameAnchor?.innerText?.trim()
           || card.querySelector('h2, h3, [class*="name"]')?.innerText?.trim()
           || `Vendor ${idx + 1}`;
 
-        // Profile URL: strip query params for a clean canonical link
         let profileUrl = nameAnchor?.href || card.querySelector('a[href*="indiamart.com"]')?.href || '';
         try { profileUrl = new URL(profileUrl).origin + new URL(profileUrl).pathname; } catch (_) {}
 
-        // Location: prefer the dedicated element, fall back to data attributes
         const locationEl   = card.querySelector('[class*="location"], [class*="Location"], [class*="city"]');
         const locationText = locationEl?.innerText?.trim().replace(/\s+/g, ' ')
           || [city, locality].filter(Boolean).join(' - ');
@@ -255,8 +304,8 @@ async function scrape(targetUrlOrKeyword, logFn) {
         const reviewEl   = card.querySelector('[id^="sellerrating_"] span, [class*="rating"] span');
         const reviews    = reviewEl?.innerText?.trim() || '';
 
-        const gstVerified = !!card.querySelector('[class*="gst"], [alt*="GST"], [title*="GST"]') || /\bGST\b/.test(card.innerText);
-        const trustSeal   = !!card.querySelector('[class*="trust"], [alt*="Trust"]') || /TrustSEAL/i.test(card.innerText);
+        const gstVerified = !!card.querySelector('[class*="gst"], [alt*="GST"], [title*="GST"]') || /\bGST\b/.test(cardText);
+        const trustSeal   = !!card.querySelector('[class*="trust"], [alt*="Trust"]') || /TrustSEAL/i.test(cardText);
 
         const productItems = [];
         card.querySelectorAll('[class*="prd-name"], [class*="product-name"], [class*="prdname"], [class*="prdtitle"]').forEach(el => {
@@ -267,7 +316,6 @@ async function scrape(targetUrlOrKeyword, logFn) {
         const priceText = getText('[class*="price"], [class*="prc"]');
         const dealsIn   = locationText.includes('Deals in') ? locationText : '';
 
-        // Must have at least one vendor identity signal — skip nav/promo cards
         if (!slug && !profileUrl && !city) return;
 
         results.push({ index: idx + 1, name, city, locality, location: locationText, dealsIn, rating, reviews, memberSince: memberText, gstVerified, trustSeal, products: productItems, price: priceText, profileUrl, slug });
