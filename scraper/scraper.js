@@ -137,7 +137,14 @@ async function scrape(targetUrlOrKeyword) {
     console.log(`[SCRAPE] Extracting vendor cards from page ${pageNum}…`);
     const pageVendors = await page.evaluate(() => {
       const results = [];
-      document.querySelectorAll('div.card[id^="LST"]').forEach((card, idx) => {
+      // Try LST-prefixed cards first (original format); fall back to SUPP- then all .card divs
+      const cardSelector = document.querySelector('div.card[id^="LST"]')
+        ? 'div.card[id^="LST"]'
+        : document.querySelector('div.card[id^="SUPP"]')
+          ? 'div.card[id^="SUPP"]'
+          : 'div.card';
+      console.log('[SCRAPE] Using card selector:', cardSelector, '— matched:', document.querySelectorAll(cardSelector).length);
+      document.querySelectorAll(cardSelector).forEach((card, idx) => {
         const getText = (sel) => card.querySelector(sel)?.innerText?.trim() || '';
 
         const city     = card.getAttribute('data-city')     || '';
@@ -169,6 +176,9 @@ async function scrape(targetUrlOrKeyword) {
 
         const priceText = getText('[class*="price"], [class*="prc"]');
         const dealsIn   = locationText.includes('Deals in') ? locationText : '';
+
+        // Skip nav/promo cards that have no vendor identity
+        if (!profileUrl && !slug && !city && name === `Vendor ${idx + 1}`) return;
 
         results.push({ index: idx + 1, name, city, locality, location: locationText, dealsIn, rating, reviews, memberSince: memberText, gstVerified, trustSeal, products: productItems, price: priceText, profileUrl, slug });
       });
