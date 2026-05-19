@@ -140,7 +140,7 @@ export default function Discover() {
   const liveProgress  = liveJob?.progress || 0;
   const liveTotal     = liveJob?.total || 0;
   const livePercent   = liveTotal ? Math.min(100, Math.round(liveProgress / liveTotal * 100)) : 0;
-  const liveLogs      = (liveJob?.log || []).slice(-8).map(l => l.msg).join('\n') || 'Waiting for logs…';
+  const liveLogs      = (liveJob?.log || []).map(l => l.msg).join('\n') || 'Waiting for logs…';
 
   return (
     <main className="n-shell">
@@ -288,7 +288,11 @@ export default function Discover() {
             ) : (
               <div className="n-progress-bar"><div className="fill" style={{ width: '33%', animation: 'pulse 1.5s ease-in-out infinite' }} /></div>
             )}
-            <pre className="n-log" ref={logRef}>{liveLogs}</pre>
+            <pre
+              className="n-log"
+              ref={logRef}
+              style={{ maxHeight: 360, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+            >{liveLogs}</pre>
           </div>
         </div>
       )}

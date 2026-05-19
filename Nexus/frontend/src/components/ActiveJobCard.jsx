@@ -46,9 +46,10 @@ export default function ActiveJobCard({ run, liveJob }) {
       )}
       <pre
         ref={logRef}
-        className="max-h-48 overflow-auto rounded-lg bg-slate-950 p-4 text-xs leading-6 text-slate-100"
+        className="overflow-auto rounded-lg bg-slate-950 p-4 text-xs leading-6 text-slate-100"
+        style={{ maxHeight: 360, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
       >
-        {(log.slice(-8).map((item) => item.msg).join('\n') || 'Waiting for live scrape logs...')}
+        {(log.map((item) => item.msg).join('\n') || 'Waiting for live scrape logs...')}
       </pre>
     </section>
   );
