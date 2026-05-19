@@ -514,7 +514,14 @@ async function enrichVendors(vendors, onProgress) {
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
 
+  const proxy = process.env.PROXY_SERVER ? {
+    server: process.env.PROXY_SERVER,
+    username: process.env.PROXY_USERNAME,
+    password: process.env.PROXY_PASSWORD,
+  } : undefined;
+
   const context = await browser.newContext({
+    ...(proxy ? { proxy } : {}),
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     viewport: { width: 1440, height: 900 },
   });

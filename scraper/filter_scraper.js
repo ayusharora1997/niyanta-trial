@@ -47,7 +47,14 @@ async function extractFilters(baseUrl) {
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
 
+  const proxy = process.env.PROXY_SERVER ? {
+    server: process.env.PROXY_SERVER,
+    username: process.env.PROXY_USERNAME,
+    password: process.env.PROXY_PASSWORD,
+  } : undefined;
+
   const context = await browser.newContext({
+    ...(proxy ? { proxy } : {}),
     userAgent:
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     viewport: { width: 1440, height: 900 },
@@ -55,10 +62,20 @@ async function extractFilters(baseUrl) {
 
   const page = await context.newPage();
 
-  // Filters are server-side rendered, so domcontentloaded is enough.
-  // We wait for the sidebarCard selector just to be safe.
   console.log('  [filters] Loading page...');
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+  if (page.url().includes('export.indiamart.com')) {
+    console.log('  [filters] Export site detected — clicking English...');
+    try {
+      await page.waitForSelector('text=English', { timeout: 10000 });
+      await page.click('text=English');
+      await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
+      await page.waitForTimeout(2000);
+    } catch (err) {
+      console.log('  [filters] Could not click English: ' + err.message);
+    }
+  }
 
   try {
     await page.waitForSelector('div.sidebarCard', { timeout: 15000 });

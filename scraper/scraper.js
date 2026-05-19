@@ -46,7 +46,15 @@ async function scrape(targetUrlOrKeyword, logFn) {
     ],
   });
 
+  const proxy = process.env.PROXY_SERVER ? {
+    server: process.env.PROXY_SERVER,
+    username: process.env.PROXY_USERNAME,
+    password: process.env.PROXY_PASSWORD,
+  } : undefined;
+  if (proxy) log(`[SCRAPER] Routing through proxy: ${proxy.server}`);
+
   const context = await browser.newContext({
+    ...(proxy ? { proxy } : {}),
     userAgent:
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     viewport: { width: 1440, height: 900 },
@@ -79,31 +87,19 @@ async function scrape(targetUrlOrKeyword, logFn) {
   const pageTitle = await page.title();
   log(`[NAV] Landed on: "${pageTitle}" | ${finalUrl}`);
 
-  // IndiaMART redirects non-Indian IPs to export.indiamart.com and overlays a
-  // language selector popup that blocks vendor cards. The popup is server-triggered
-  // by IP on every load — forcibly remove it from the DOM to expose the results.
+  // IndiaMART redirects non-Indian IPs to export.indiamart.com which shows a
+  // full-page language selector before showing results. Click "English" to proceed.
   if (finalUrl.includes('export.indiamart.com')) {
-    log('[NAV] Detected export site redirect — removing language popup from DOM...');
-    await page.waitForTimeout(2000); // let popup fully render first
-    const removed = await page.evaluate(() => {
-      let count = 0;
-      // Kill any element that looks like a modal/overlay/language popup
-      const kill = [
-        '[class*="langModal"]', '[class*="lang-modal"]', '[class*="langSelect"]',
-        '[class*="languageModal"]', '[class*="language-select"]', '[class*="langPopup"]',
-        '[id*="langModal"]', '[id*="languageModal"]', '[id*="langSelect"]',
-        '[class*="modal"]', '[class*="overlay"]', '[class*="backdrop"]',
-      ];
-      kill.forEach(sel => {
-        document.querySelectorAll(sel).forEach(el => { el.remove(); count++; });
-      });
-      // Restore scrolling which modals typically lock
-      document.body.style.overflow = 'auto';
-      document.documentElement.style.overflow = 'auto';
-      return count;
-    });
-    log(`[NAV] Removed ${removed} popup element(s). Waiting for cards...`);
-    await page.waitForTimeout(1000);
+    log('[NAV] Detected export site — clicking English on language selector...');
+    try {
+      await page.waitForSelector('text=English', { timeout: 10000 });
+      await page.click('text=English');
+      await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
+      await page.waitForTimeout(2000);
+      log('[NAV] Language selected. Now on: ' + page.url());
+    } catch (err) {
+      log('[NAV] Could not click English: ' + err.message);
+    }
   }
 
   // Wait for any vendor card to appear — try data-attribute anchor first, fall back to CSS class
