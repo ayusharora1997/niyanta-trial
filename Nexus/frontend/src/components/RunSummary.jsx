@@ -55,18 +55,33 @@ export default function RunSummary({ run, vendors, onVendorSelect }) {
         </dl>
 
         {/* Active filters from this run */}
-        {Array.isArray(run.filters_applied) && run.filters_applied.length > 0 && (
-          <div className="mt-4 border-t border-slate-100 pt-4">
-            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Filters active during this search</p>
-            <div className="flex flex-wrap gap-2">
-              {run.filters_applied.map((f, i) => (
-                <span key={i} className="inline-flex items-center rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-800">
-                  {f.label}: {f.value}
-                </span>
-              ))}
+        {Array.isArray(run.filters_applied) && run.filters_applied.length > 0 && (() => {
+          // Group by label; treat overly long or self-referential labels as untagged
+          const groups = {};
+          for (const f of run.filters_applied) {
+            const labelLooksValid = f.label && f.label.length <= 30 && !f.label.includes(f.value);
+            const key = labelLooksValid ? f.label : '_';
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(f.value);
+          }
+          return (
+            <div className="mt-4 border-t border-slate-100 pt-4">
+              <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Filters active during this search</p>
+              <div className="flex flex-col gap-2">
+                {Object.entries(groups).map(([label, values], gi) => (
+                  <div key={gi} className="flex flex-wrap items-center gap-2">
+                    {label !== '_' && <span className="text-xs font-bold text-slate-600">{label}:</span>}
+                    {values.map((v, i) => (
+                      <span key={i} className="inline-flex items-center rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-800">
+                        {v}
+                      </span>
+                    ))}
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </section>
 
       <section className="card overflow-hidden">

@@ -234,19 +234,36 @@ export default function Discover() {
       )}
 
       {/* Filter banner */}
-      {bannerRun && (
-        <div className="n-banner">
-          <span className="icon">⚠</span>
-          <span className="msg">Active IndiaMART filters detected on last search:</span>
-          <span className="pills">
-            {bannerRun.filters_applied.map((f, i) => (
-              <span className="pill" key={i}><span className="k">{f.label}:</span> {f.value}</span>
-            ))}
-          </span>
-          <span className="spacer" />
-          <button className="x" onClick={() => setBannerOpen(false)}>×</button>
-        </div>
-      )}
+      {bannerRun && (() => {
+        // Group filters by label. When the scraper couldn't determine a clean
+        // label, it stored the concatenated sibling text as the label — detect
+        // that and just show values without the label noise.
+        const groups = {};
+        for (const f of bannerRun.filters_applied) {
+          const labelLooksValid = f.label && f.label.length <= 30 && !f.label.includes(f.value);
+          const key = labelLooksValid ? f.label : '_';
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(f.value);
+        }
+        return (
+          <div className="n-banner">
+            <span className="icon">⚠</span>
+            <span className="msg">Active IndiaMART filters detected on last search:</span>
+            <span className="pills">
+              {Object.entries(groups).map(([label, values], gi) => (
+                <span className="pill-group" key={gi} style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                  {label !== '_' && <span className="k" style={{ fontWeight: 600, marginRight: 4 }}>{label}:</span>}
+                  {values.map((v, i) => (
+                    <span className="pill" key={i}>{v}</span>
+                  ))}
+                </span>
+              ))}
+            </span>
+            <span className="spacer" />
+            <button className="x" onClick={() => setBannerOpen(false)}>×</button>
+          </div>
+        );
+      })()}
 
       {/* Live job card */}
       {isActive && liveJob && (
