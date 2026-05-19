@@ -34,24 +34,67 @@ async function scrape(targetUrlOrKeyword) {
 
   const browser = await chromium.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-infobars',
+      '--window-size=1440,900',
+    ],
   });
 
   const context = await browser.newContext({
     userAgent:
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     viewport: { width: 1440, height: 900 },
+    locale: 'en-IN',
+    timezoneId: 'Asia/Kolkata',
+    extraHTTPHeaders: {
+      'Accept-Language': 'en-IN,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    },
+  });
+
+  // Patch away the most common bot-detection signals
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-IN', 'en'] });
+    window.chrome = { runtime: {} };
   });
 
   const page = await context.newPage();
 
   console.log('[NAV] Navigating to:', TARGET_URL);
-  await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.goto(TARGET_URL, { waitUntil: 'networkidle', timeout: 60000 }).catch(async (err) => {
+    // networkidle can time out on heavy pages — fall back to domcontentloaded + manual wait
+    console.warn('[NAV] networkidle timed out, falling back:', err.message);
+    await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForTimeout(4000);
+  });
+
+  // Log the actual URL and title so we can spot bot-detection redirects in Railway logs
+  const finalUrl   = page.url();
+  const pageTitle  = await page.title();
+  console.log(`[NAV] Landed on: "${pageTitle}" | ${finalUrl}`);
+
+  // Save a screenshot whenever 0 vendors come back — helps diagnose CAPTCHA / empty pages
+  const debugScreenshot = async (label) => {
+    try {
+      const buf = await page.screenshot({ fullPage: false });
+      const b64 = buf.toString('base64').substring(0, 200);
+      console.log(`[DEBUG] ${label} screenshot (base64 prefix): ${b64}…`);
+    } catch (_) {}
+  };
 
   // Wait for any vendor card to appear — try data-attribute anchor first, fall back to CSS class
-  await page.waitForSelector('[data-tscode], div.card', { timeout: 20000 }).catch(() => {
-    console.warn('[NAV] No vendor cards found — page may be empty or structure changed.');
-  });
+  const cardFound = await page.waitForSelector('[data-tscode], div.card', { timeout: 20000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!cardFound) {
+    console.warn('[NAV] No vendor cards found — page may be empty or bot-protected.');
+    await debugScreenshot('no-cards');
+  }
 
   // ── Detect active filters from the first page only ────────────────────────
   console.log('[FILTER] Detecting active filters...');
@@ -219,6 +262,13 @@ async function scrape(targetUrlOrKeyword) {
     }
 
     console.log(`[SCRAPE] Page ${pageNum}: ${pageVendors.length} cards, ${newCount} new`);
+
+    if (pageVendors.length === 0) {
+      // Dump the page HTML snippet to help diagnose what we actually got
+      const snippet = await page.evaluate(() => document.body?.innerHTML?.substring(0, 800) || '(empty body)');
+      console.warn('[DEBUG] 0 cards — page body snippet:', snippet);
+      await debugScreenshot(`page${pageNum}-empty`);
+    }
 
     if (newCount === 0 || pageVendors.length === 0) {
       console.log('[SCRAPE] No new vendors — stopping pagination.');
