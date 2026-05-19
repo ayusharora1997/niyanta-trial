@@ -19,7 +19,22 @@ if (!searchId) { console.error('SEARCH_ID is required'); process.exit(1); }
 const url = rawUrl || (keyword ? buildSearchUrl(keyword) : null);
 if (!url)      { console.error('SEARCH_URL or SEARCH_KEYWORD is required'); process.exit(1); }
 
-const log = (msg) => console.log(`[${searchId}] ${msg}`);
+// Optional: POST live updates back to the Niyanta server so the frontend
+// can show actual scrape progress instead of just "GitHub Actions triggered".
+const SERVER_URL = process.env.SERVER_URL || '';
+function postUpdate(payload) {
+  if (!SERVER_URL) return Promise.resolve();
+  return fetch(`${SERVER_URL.replace(/\/$/, '')}/api/runs/${searchId}/log`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+
+const log = (msg) => {
+  console.log(`[${searchId}] ${msg}`);
+  postUpdate({ msg });
+};
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
@@ -68,8 +83,10 @@ async function main() {
     log(`${label} -- Layer 2: enriching ${newVendors.length} vendor profiles...`);
     await db.updateSearchRun(searchId, { status: 'enriching_profiles' }).catch(() => {});
 
+    await postUpdate({ total: newVendors.length, progress: 0 });
     const enriched = await enrichVendors(newVendors, (entry, done, total) => {
       log(`${label} -- Layer 2 [${done}/${total}]: ${entry.name}`);
+      postUpdate({ progress: done, total });
     });
 
     await db.updateSearchRun(searchId, { status: 'saving' }).catch(() => {});
@@ -125,6 +142,7 @@ async function main() {
     });
 
     log(`Pipeline complete — ${totalSaved} vendors saved across ${urlsDone} URL(s).`);
+    await postUpdate({ status: 'completed' });
 
   } catch (err) {
     log(`ERROR: ${err.message}`);
@@ -134,6 +152,7 @@ async function main() {
       error_text:    err.stack?.substring(0, 1000),
       completed_at:  new Date().toISOString(),
     }).catch(() => {});
+    await postUpdate({ status: 'error', msg: `ERROR: ${err.message}` });
     process.exit(1);
   }
 }

@@ -133,10 +133,11 @@ async function saveVendorProfile(enrichedVendor, searchRunDbId) {
     primary_contact_phone: p.phone || null,
     indiamart_url:         v.profileUrl || null,
 
-    // ── GSTIN — only what we can read directly from the page
-    // Full 15-char if found in page text, masked partial if not, null if absent
-    gstin:         gstiNFull || p.gstNumber || null,
-    gstin_verified: !!gstiNFull,   // only true if full GSTIN confirmed without TrustSEAL
+    // ── GSTIN — only full verified value, never partial/placeholder text
+    // (storing partials caused UNIQUE constraint collisions when the export
+    // site returned the same placeholder for every vendor)
+    gstin:         gstiNFull,
+    gstin_verified: !!gstiNFull,
     iec_number:       biz['Import Export Code (IEC)'] || null,
     // UDYAM / MSME — stored in both columns; udyam_number is the modern format
     udyam_number:     p.udyamNumber || null,

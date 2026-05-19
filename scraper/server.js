@@ -160,6 +160,26 @@ app.post('/api/scrape/multi', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// POST /api/runs/:searchId/log
+// Receives live progress from the GitHub Actions pipeline so the frontend
+// can show real log lines instead of just the trigger message.
+// Body: { msg?, progress?, total?, status? }
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/api/runs/:searchId/log', (req, res) => {
+  const { searchId } = req.params;
+  const { msg, progress, total, status } = req.body || {};
+  if (!jobs[searchId]) jobs[searchId] = { status: 'running', progress: 0, total: 0, log: [], error: null };
+  if (msg) {
+    jobs[searchId].log.push({ ts: Date.now(), msg });
+    if (jobs[searchId].log.length > 500) jobs[searchId].log.splice(0, jobs[searchId].log.length - 500);
+  }
+  if (typeof progress === 'number') jobs[searchId].progress = progress;
+  if (typeof total === 'number')    jobs[searchId].total    = total;
+  if (status)                       jobs[searchId].status   = status;
+  res.json({ ok: true });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GET /api/runs
 // Returns the 20 most recent search runs
 // ─────────────────────────────────────────────────────────────────────────────

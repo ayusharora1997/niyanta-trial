@@ -71,6 +71,7 @@ jobs:
           PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
+          SERVER_URL: ${{ secrets.SERVER_URL }}
         run: node pipeline.js
 
       - name: Upload debug artifacts
