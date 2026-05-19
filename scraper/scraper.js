@@ -79,24 +79,31 @@ async function scrape(targetUrlOrKeyword, logFn) {
   const pageTitle = await page.title();
   log(`[NAV] Landed on: "${pageTitle}" | ${finalUrl}`);
 
-  // IndiaMART redirects non-Indian IPs to export.indiamart.com and shows a
-  // language selector popup. Clicking "English" updates the URL with lang:en
-  // in the tags param — reloading that URL skips the popup entirely.
+  // IndiaMART redirects non-Indian IPs to export.indiamart.com and overlays a
+  // language selector popup that blocks vendor cards. The popup is server-triggered
+  // by IP on every load — forcibly remove it from the DOM to expose the results.
   if (finalUrl.includes('export.indiamart.com')) {
-    log('[NAV] Detected export site redirect — selecting language...');
-
-    // Click English (updates URL with lang:en tag) and also select INR currency
-    await page.click('a:has-text("English"), li:has-text("English"), [data-lang="en"]').catch(() => {});
+    log('[NAV] Detected export site redirect — removing language popup from DOM...');
+    await page.waitForTimeout(2000); // let popup fully render first
+    const removed = await page.evaluate(() => {
+      let count = 0;
+      // Kill any element that looks like a modal/overlay/language popup
+      const kill = [
+        '[class*="langModal"]', '[class*="lang-modal"]', '[class*="langSelect"]',
+        '[class*="languageModal"]', '[class*="language-select"]', '[class*="langPopup"]',
+        '[id*="langModal"]', '[id*="languageModal"]', '[id*="langSelect"]',
+        '[class*="modal"]', '[class*="overlay"]', '[class*="backdrop"]',
+      ];
+      kill.forEach(sel => {
+        document.querySelectorAll(sel).forEach(el => { el.remove(); count++; });
+      });
+      // Restore scrolling which modals typically lock
+      document.body.style.overflow = 'auto';
+      document.documentElement.style.overflow = 'auto';
+      return count;
+    });
+    log(`[NAV] Removed ${removed} popup element(s). Waiting for cards...`);
     await page.waitForTimeout(1000);
-    await page.click('a:has-text("INR"), li:has-text("INR"), a:has-text("Indian Rupee")').catch(() => {});
-    await page.waitForTimeout(1000);
-
-    // Reload the URL that now contains lang:en — this renders the page without the popup
-    const urlWithLang = page.url();
-    log('[NAV] Reloading with language URL: ' + urlWithLang);
-    await page.goto(urlWithLang, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await page.waitForTimeout(3000);
-    log('[NAV] Reloaded. Title: ' + await page.title());
   }
 
   // Wait for any vendor card to appear — try data-attribute anchor first, fall back to CSS class
