@@ -231,7 +231,7 @@ async function runPipeline({ searchId, url, searchName, keyword, platform, count
     // 2. Run search scraper
     log('Launching search scraper…');
     jobs[searchId].status = 'scraping_search';
-    const { vendors, activeFilters = [] } = await runSearch(url);
+    const { vendors, activeFilters = [] } = await runSearch(url, log);
     jobs[searchId].total = vendors.length;
     log(`Search done — ${vendors.length} vendors found.`);
 
@@ -326,7 +326,7 @@ async function runMultiPipeline({ searchId, url, searchName, keyword, platform, 
     log(`${label} -- Layer 1: scraping search results...`);
     jobs[searchId].status = 'scraping_search';
 
-    const { vendors, activeFilters } = await runSearch(targetUrl);
+    const { vendors, activeFilters } = await runSearch(targetUrl, log);
 
     // Save detected filters for the base URL pass only
     if (label === 'Base URL' && Array.isArray(activeFilters) && activeFilters.length) {

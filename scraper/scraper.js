@@ -23,7 +23,8 @@ function buildSearchUrl(keyword) {
  * @param {string} targetUrlOrKeyword  A full IndiaMART search URL, OR a plain
  *                                     keyword string (no "http" prefix).
  */
-async function scrape(targetUrlOrKeyword) {
+async function scrape(targetUrlOrKeyword, logFn) {
+  const log = logFn || console.log;
   const raw = targetUrlOrKeyword
     || process.env.SEARCH_KEYWORD
     || process.env.INDIAMART_KEYWORD
@@ -65,39 +66,28 @@ async function scrape(targetUrlOrKeyword) {
 
   const page = await context.newPage();
 
-  console.log('[NAV] Navigating to:', TARGET_URL);
+  log('[NAV] Navigating to: ' + TARGET_URL);
   await page.goto(TARGET_URL, { waitUntil: 'networkidle', timeout: 60000 }).catch(async (err) => {
-    // networkidle can time out on heavy pages — fall back to domcontentloaded + manual wait
-    console.warn('[NAV] networkidle timed out, falling back:', err.message);
+    log('[NAV] networkidle timed out, falling back: ' + err.message);
     await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForTimeout(4000);
   });
 
-  // Log the actual URL and title so we can spot bot-detection redirects in Railway logs
-  const finalUrl   = page.url();
-  const pageTitle  = await page.title();
-  console.log(`[NAV] Landed on: "${pageTitle}" | ${finalUrl}`);
-
-  // Save a screenshot whenever 0 vendors come back — helps diagnose CAPTCHA / empty pages
-  const debugScreenshot = async (label) => {
-    try {
-      const buf = await page.screenshot({ fullPage: false });
-      const b64 = buf.toString('base64').substring(0, 200);
-      console.log(`[DEBUG] ${label} screenshot (base64 prefix): ${b64}…`);
-    } catch (_) {}
-  };
+  const finalUrl  = page.url();
+  const pageTitle = await page.title();
+  log(`[NAV] Landed on: "${pageTitle}" | ${finalUrl}`);
 
   // Wait for any vendor card to appear — try data-attribute anchor first, fall back to CSS class
   const cardFound = await page.waitForSelector('[data-tscode], div.card', { timeout: 20000 })
     .then(() => true)
     .catch(() => false);
   if (!cardFound) {
-    console.warn('[NAV] No vendor cards found — page may be empty or bot-protected.');
-    await debugScreenshot('no-cards');
+    const bodySnippet = await page.evaluate(() => document.body?.innerText?.substring(0, 300) || '(empty)');
+    log('[NAV] No vendor cards found. Page text: ' + bodySnippet);
   }
 
   // ── Detect active filters from the first page only ────────────────────────
-  console.log('[FILTER] Detecting active filters...');
+  log('[FILTER] Detecting active filters...');
   const activeFilters = await page.evaluate(() => {
     const candidates = [];
     const selectors = [
@@ -159,7 +149,7 @@ async function scrape(targetUrlOrKeyword) {
     }).slice(0, 12);
   });
 
-  console.log(`[FILTER] ${activeFilters.length} filter(s): ${activeFilters.map(f => `${f.label}=${f.value}`).join(', ') || 'none'}`);
+  log(`[FILTER] ${activeFilters.length} filter(s): ${activeFilters.map(f => `${f.label}=${f.value}`).join(', ') || 'none'}`);
 
   // ── Paginated scrape — up to MAX_PAGES ────────────────────────────────────
   const allVendors = [];
@@ -170,15 +160,15 @@ async function scrape(targetUrlOrKeyword) {
     if (pageNum > 1) {
       const pageUrl = new URL(TARGET_URL);
       pageUrl.searchParams.set('page', pageNum);
-      console.log(`[NAV] Page ${pageNum}/${MAX_PAGES}: ${pageUrl.toString()}`);
+      log(`[NAV] Page ${pageNum}/${MAX_PAGES}: ${pageUrl.toString()}`);
       await page.goto(pageUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 60000 });
       await page.waitForSelector('[data-tscode], div.card', { timeout: 15000 }).catch(() => {});
     }
 
-    console.log(`[SCRAPE] Scrolling page ${pageNum} to load lazy cards…`);
+    log(`[SCRAPE] Scrolling page ${pageNum}…`);
     await autoScroll(page);
 
-    console.log(`[SCRAPE] Extracting vendor cards from page ${pageNum}…`);
+    log(`[SCRAPE] Extracting vendor cards from page ${pageNum}…`);
     const pageVendors = await page.evaluate(() => {
       const results = [];
 
@@ -261,17 +251,15 @@ async function scrape(targetUrlOrKeyword) {
       }
     }
 
-    console.log(`[SCRAPE] Page ${pageNum}: ${pageVendors.length} cards, ${newCount} new`);
+    log(`[SCRAPE] Page ${pageNum}: ${pageVendors.length} cards found, ${newCount} new`);
 
     if (pageVendors.length === 0) {
-      // Dump the page HTML snippet to help diagnose what we actually got
-      const snippet = await page.evaluate(() => document.body?.innerHTML?.substring(0, 800) || '(empty body)');
-      console.warn('[DEBUG] 0 cards — page body snippet:', snippet);
-      await debugScreenshot(`page${pageNum}-empty`);
+      const snippet = await page.evaluate(() => (document.body?.innerText || '').substring(0, 400));
+      log('[DEBUG] Page body text: ' + snippet);
     }
 
     if (newCount === 0 || pageVendors.length === 0) {
-      console.log('[SCRAPE] No new vendors — stopping pagination.');
+      log('[SCRAPE] No new vendors — stopping pagination.');
       break;
     }
 
@@ -281,7 +269,7 @@ async function scrape(targetUrlOrKeyword) {
   await browser.close();
 
   const vendors = allVendors;
-  console.log(`[DONE] ${vendors.length} vendors total across ${Math.min(pageNum, MAX_PAGES)} page(s) | active filters: ${activeFilters.length}`);
+  log(`[DONE] ${vendors.length} vendors total across ${Math.min(pageNum, MAX_PAGES)} page(s) | active filters: ${activeFilters.length}`);
 
   // ── Build Markdown ─────────────────────────────────────────────────────────
   const now   = new Date().toISOString().replace('T', ' ').substring(0, 19);
